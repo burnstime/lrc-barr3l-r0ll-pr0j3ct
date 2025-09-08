@@ -1,0 +1,46 @@
+services:
+  lab:
+    build:
+      context: ./lab_server
+    image: documents-lab:latest
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      USE_REDIS_RATE_LIMIT: "1"
+      DECODE_ENABLED: "0" # disable in production by default
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    secrets:
+      - SECRET_KEY
+      - ADMIN_TOKEN
+
+  redteam:
+    build:
+      context: ./redteam_crawler
+    image: documents-redteam:latest
+    depends_on:
+      - lab
+    volumes:
+      - ./reports:/reports
+    environment:
+      TARGET: http://lab:8000
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./lab_server/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - lab
+
+secrets:
+  SECRET_KEY:
+    file: ./secrets/SECRET_KEY
+  ADMIN_TOKEN:
+    file: ./secrets/ADMIN_TOKEN
