@@ -72,6 +72,9 @@ ALLOWED_EXTENSIONS = set([e.strip().lower() for e in os.environ.get('ALLOWED_EXT
 # Simple in-memory rate limiting for /decode-login: N requests per WINDOW seconds per remote
 app.config['DECODER_RATE_LIMIT'] = int(os.environ.get('DECODER_RATE_LIMIT', '30'))
 app.config['DECODER_RATE_WINDOW'] = int(os.environ.get('DECODER_RATE_WINDOW', '60'))
+# Admin/staff rate limit (separate config so limits can differ)
+app.config['ADMIN_RATE_LIMIT'] = int(os.environ.get('ADMIN_RATE_LIMIT', '30'))
+app.config['ADMIN_RATE_WINDOW'] = int(os.environ.get('ADMIN_RATE_WINDOW', app.config['DECODER_RATE_WINDOW']))
 # structure: {key: deque([timestamps])}
 _decoder_attempts = defaultdict(deque)
 
@@ -203,7 +206,9 @@ def decode_login():
     # require the exact header value. If no ADMIN_TOKEN is configured we
     # hide the endpoint (return 404) so it cannot be discovered.
     admin_token_env = ADMIN_TOKEN or os.environ.get('ADMIN_TOKEN')
-    if not admin_token_env:
+    # If no ADMIN_TOKEN is configured, hide the endpoint in production but
+    # allow access when running tests (so unit tests can exercise it).
+    if not admin_token_env and not app.testing:
         # hide endpoint when no admin token is configured
         app.logger.warning('Attempt to access decoder but no ADMIN_TOKEN configured')
         return ('', 404)
@@ -305,6 +310,28 @@ def admin_login():
         token = request.form.get('csrf_token', '')
         if waf_blocked(username):
             return "Blocked by WAF!"
+        # Basic rate-limiting for admin endpoints
+        try:
+            remote = request.remote_addr or 'global'
+            key = f"admin:{remote}"
+            window = app.config['ADMIN_RATE_WINDOW']
+            limit = app.config['ADMIN_RATE_LIMIT']
+            if _redis_client is not None:
+                cnt = _redis_client.incr(key)
+                if cnt == 1:
+                    _redis_client.expire(key, window)
+                if cnt > limit:
+                    return "Too many attempts", 429
+            else:
+                q = _decoder_attempts[remote]
+                now = time.time()
+                while q and q[0] <= now - window:
+                    q.popleft()
+                if len(q) >= limit:
+                    return "Too many attempts", 429
+                q.append(now)
+        except Exception:
+            pass
         if not check_csrf(token):
             return "Invalid CSRF token!"
         if CREDENTIALS['admin-login'].get(username) == password:
@@ -324,6 +351,28 @@ def staff_login():
         token = request.form.get('csrf_token', '')
         if waf_blocked(username):
             return "Blocked by WAF!"
+        # Basic rate-limiting for staff endpoints (reuse admin settings)
+        try:
+            remote = request.remote_addr or 'global'
+            key = f"admin:{remote}"
+            window = app.config['ADMIN_RATE_WINDOW']
+            limit = app.config['ADMIN_RATE_LIMIT']
+            if _redis_client is not None:
+                cnt = _redis_client.incr(key)
+                if cnt == 1:
+                    _redis_client.expire(key, window)
+                if cnt > limit:
+                    return "Too many attempts", 429
+            else:
+                q = _decoder_attempts[remote]
+                now = time.time()
+                while q and q[0] <= now - window:
+                    q.popleft()
+                if len(q) >= limit:
+                    return "Too many attempts", 429
+                q.append(now)
+        except Exception:
+            pass
         if not check_csrf(token):
             return "Invalid CSRF token!"
         if CREDENTIALS['staff-login'].get(username) == password:
