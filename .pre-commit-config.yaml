@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+  - repo: local
+    hooks:
+      - id: secrets-scanner
+        name: Local secrets scanner
+        entry: python tools/secrets_scanner.py
+        language: system
+        files: ''

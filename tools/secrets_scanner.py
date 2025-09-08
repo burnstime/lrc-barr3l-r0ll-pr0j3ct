@@ -60,12 +60,17 @@ def scan_file(path: str):
 
 
 def walk_and_scan(root: str):
+    # paths to ignore (reports, third-party artifacts)
+    IGNORE_PATHS = ['.git', 'node_modules', '__pycache__', 'tools/reports', 'reports']
     for dirpath, dirnames, filenames in os.walk(root):
-        # skip common binary dirs
-        if '.git' in dirpath or 'node_modules' in dirpath or '__pycache__' in dirpath:
+        # skip ignored dirs
+        if any(p in dirpath for p in IGNORE_PATHS):
             continue
         for fn in filenames:
             if fn.endswith(('.pyc', '.png', '.jpg', '.jpeg', '.gif', '.zip')):
+                continue
+            # skip installer artifacts
+            if fn in ('findings.txt',):
                 continue
             scan_file(os.path.join(dirpath, fn))
 
