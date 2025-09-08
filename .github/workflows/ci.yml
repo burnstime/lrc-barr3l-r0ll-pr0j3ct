@@ -6,20 +6,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run truffleHog (container)
-        uses: addnab/docker-run-action@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          image: trufflesecurity/trufflehog:latest
-          options: --rm -v ${{ github.workspace }}:/workspace
-          run: |
-            trufflehog filesystem /workspace --json > findings.json || true
-            if [ -s findings.json ]; then
-              echo "Potential secrets found by truffleHog:";
-              cat findings.json;
-              exit 1;
-            else
-              echo "No secrets found by truffleHog.";
-            fi
+          python-version: '3.11'
+      - name: Install truffleHog
+        run: |
+          python -m pip install --upgrade pip
+          pip install truffleHog
+      - name: Run truffleHog filesystem scan
+        run: |
+          trufflehog filesystem . --json > findings.json || true
+          if [ -s findings.json ]; then
+            echo "Potential secrets found by truffleHog:";
+            cat findings.json;
+            exit 1;
+          else
+            echo "No secrets found by truffleHog.";
+          fi
 
   test:
     name: Unit tests & smoke
