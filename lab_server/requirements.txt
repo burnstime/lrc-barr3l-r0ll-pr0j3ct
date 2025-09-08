@@ -4,3 +4,4 @@ flask-session>=0.4.0
 redis>=4.0
 # Add your Python dependencies here
 flask
+requests>=2.0
