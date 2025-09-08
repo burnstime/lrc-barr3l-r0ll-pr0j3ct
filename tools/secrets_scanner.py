@@ -19,6 +19,15 @@ KEYWORDS = [
     b'SECRET', b'PASSWORD', b'AWS', b'API_KEY', b'ADMIN_TOKEN', b'TOKEN', b'PRIVATE', b'KEY'
 ]
 
+# compiled regexes for known secret formats
+REGEX_PATTERNS = [
+    re.compile(rb'AKIA[0-9A-Z]{16}'),  # AWS Access Key ID
+    re.compile(rb'AIza[0-9A-Za-z\-_]{35}'),  # Google API key
+    re.compile(rb'"private_key"\s*:\s*"-----BEGIN [A-Z ]+ PRIVATE KEY-----'),  # GCP service account JSON
+    re.compile(rb'-----BEGIN (RSA |)PRIVATE KEY-----'),  # PEM private keys
+    re.compile(rb'xox[baprs]-[0-9A-Za-z-]{10,}'),  # Slack-ish tokens (approx)
+]
+
 findings = []
 
 def shannon_entropy(data: bytes) -> float:
@@ -41,6 +50,20 @@ def scan_file(path: str):
             raw = f.read()
     except Exception:
         return
+    # respect ignore file entries
+    try:
+        root = os.getcwd()
+        ignore_path = os.path.join(root, '.secrets-ignore')
+        if os.path.exists(ignore_path):
+            with open(ignore_path, 'r', encoding='utf-8') as ig:
+                for line in ig:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if line in path or os.path.abspath(os.path.join(root, line)) in path:
+                        return
+    except Exception:
+        pass
     # skip binary-ish files over some size
     if len(raw) > 1024 * 1024:
         return
@@ -57,6 +80,14 @@ def scan_file(path: str):
             ent = shannon_entropy(t)
             if ent > 4.5:
                 findings.append((path, f'High-entropy token (len={len(t)}, ent={ent:.2f})'))
+
+    # regex-based secret checks
+    for rx in REGEX_PATTERNS:
+        try:
+            if rx.search(raw):
+                findings.append((path, f'Regex match: {rx.pattern.decode(errors="ignore")}'))
+        except Exception:
+            pass
 
 
 def walk_and_scan(root: str):
