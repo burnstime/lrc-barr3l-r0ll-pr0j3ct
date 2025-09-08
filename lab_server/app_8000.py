@@ -36,16 +36,15 @@ def check_csrf(token):
     return token == session.get('csrf_token')
 
 
-# Generate every possible combination of login type, username, and password
+# Generate credential mapping: map each username to its corresponding password
 usernames = ['user', 'admin', 'staff']
 passwords = ['userpass', 'adminpass', 'staffpass']
 CREDENTIALS = {}
 for login_type in ['login', 'admin-login', 'staff-login']:
     CREDENTIALS[login_type] = {}
-    for u in usernames:
-        for p in passwords:
-            # store last password for username (simple map for tests)
-            CREDENTIALS[login_type][u] = p
+    # Map username -> corresponding password using zip to avoid accidental overwrites
+    for u, p in zip(usernames, passwords):
+        CREDENTIALS[login_type][u] = p
 
 
 # Utility: list all combos
@@ -69,8 +68,9 @@ def decode_login():
     for login_type, creds in CREDENTIALS.items():
         for user, pwd in creds.items():
             if username == user and password == pwd:
-                return jsonify({"result": "match", "type": login_type, "username": username, "password": password})
-    return jsonify({"result": "invalid", "username": username, "password": password})
+                # do not return stored password values in responses
+                return jsonify({"result": "match", "type": login_type, "username": username})
+    return jsonify({"result": "invalid", "username": username})
 
 
 @app.route('/login', methods=['GET', 'POST'])

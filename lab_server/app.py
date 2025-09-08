@@ -54,8 +54,8 @@ secret = _read_secret_file('SECRET_KEY')
 if secret:
     app.secret_key = secret
 else:
-    # Ephemeral secret for development; log so operators set a persistent value.
-    app.logger.warning('SECRET_KEY not set; generating ephemeral key. Set SECRET_KEY in production.')
+    # Ephemeral secret for development; log at INFO so tests and local probes aren't noisy.
+    app.logger.info('SECRET_KEY not set; generating ephemeral key. Set SECRET_KEY in production.')
     app.secret_key = secrets.token_hex(32)
 
 # Cookie/security defaults. Allow override via env for testing.
@@ -217,28 +217,31 @@ def decode_login():
 
     # Stronger admin guard: require an ADMIN_TOKEN via header only (X-ADMIN-TOKEN)
     admin_token_env = get_admin_token()
-    # If no ADMIN_TOKEN is configured, hide the endpoint in production but allow
-    # access when running tests so unit tests can exercise it.
-    if not admin_token_env and not app.testing:
-        app.logger.warning('Attempt to access decoder but no ADMIN_TOKEN configured')
-        return ('', 404)
-
-    # Only accept the strict header name; don't accept query/form tokens here.
-    provided = request.headers.get('X-ADMIN-TOKEN')
-    # If no token provided, treat as forbidden (do not leak existence)
-    if not provided:
-        app.logger.warning(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
-        _send_alert(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
-        return jsonify({"result": "forbidden"}), 403
-
-    # Use constant-time compare to avoid timing leaks
-    try:
-        if not secrets.compare_digest(str(provided), str(admin_token_env)):
-            app.logger.warning(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
-            _send_alert(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+    # If no ADMIN_TOKEN is configured:
+    # - in production: hide endpoint (404)
+    # - in testing: allow access (so unit tests can exercise it)
+    if not admin_token_env:
+        if not app.testing:
+            app.logger.warning('Attempt to access decoder but no ADMIN_TOKEN configured')
+            return ('', 404)
+        # testing mode and no admin token: allow access without header
+    else:
+        # Only accept the strict header name; don't accept query/form tokens here.
+        provided = request.headers.get('X-ADMIN-TOKEN')
+        # If no token provided, treat as forbidden (do not leak existence)
+        if not provided:
+            app.logger.warning(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
+            _send_alert(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
             return jsonify({"result": "forbidden"}), 403
-    except Exception:
-        return jsonify({"result": "forbidden"}), 403
+
+        # Use constant-time compare to avoid timing leaks
+        try:
+            if not secrets.compare_digest(str(provided), str(admin_token_env)):
+                app.logger.warning(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+                _send_alert(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+                return jsonify({"result": "forbidden"}), 403
+        except Exception:
+            return jsonify({"result": "forbidden"}), 403
 
     # Network restriction: only allow loopback or private addresses (RFC1918/ULA)
     remote = (request.remote_addr or '')
