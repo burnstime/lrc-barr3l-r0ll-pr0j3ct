@@ -1,0 +1,44 @@
+name: Create GitHub Project
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Project name'
+        required: false
+        default: 'Security Roadmap'
+      project_body:
+        description: 'Project body/description'
+        required: false
+        default: 'Project created by CI helper.'
+
+permissions:
+  contents: write
+  issues: write
+  repository-projects: write
+
+jobs:
+  create-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub CLI
+        uses: cli/gh-action@v2
+        with:
+          version: latest
+
+      - name: Install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Authenticate gh
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Run project-creation script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Running project creator with name='${{ github.event.inputs.project_name }}'"
+          bash tools/create_github_project.sh "${{ github.event.inputs.project_name }}" "${{ github.event.inputs.project_body }}"
