@@ -25,14 +25,41 @@ jobs:
         with:
           name: secrets-findings
           path: findings.txt
-      - name: Comment on PR with findings
+      - name: Comment on PR with findings summary
         if: ${{ github.event_name == 'pull_request' && steps.scan.outputs.found == 'true' }}
         uses: actions/github-script@v6
         with:
           script: |
             const fs = require('fs');
-            const findings = fs.readFileSync('findings.txt','utf8');
-            const body = `Secrets scanner found potential findings:\n\n\`\`\`\n${findings}\n\`\`\`\nPlease review and rotate secrets if necessary.`;
+            const raw = fs.readFileSync('findings.txt','utf8').trim();
+            const lines = raw.split(/\r?\n/).filter(Boolean);
+            const max = 5;
+            const items = lines.slice(0, max).map(l => {
+              // expected format: - path: message
+              const m = l.replace(/^\-\s*/, '');
+              const idx = m.indexOf(':');
+              if (idx > 0) {
+                const path = m.slice(0, idx).trim();
+                const msg = m.slice(idx+1).trim();
+                // try to show a small context snippet from file
+                let snippet = '';
+                try {
+                  const content = fs.readFileSync(path, 'utf8');
+                  const s = content.split(/\r?\n/).slice(0,5).join('\n');
+                  snippet = '\n```\n' + s + '\n```\n';
+                } catch (e) {
+                  snippet = '';
+                }
+                return `- **${path}**: ${msg}${snippet}`;
+              }
+              return `- ${m}`;
+            });
+            let body = 'Secrets scanner found potential findings (showing up to 5):\n\n';
+            body += items.join('\n');
+            if (lines.length > max) {
+              body += `\n\nAnd ${lines.length - max} more findings. See attached artifact for full list.`;
+            }
+            body += '\n\nIf these are false positives, propose entries via a `secrets-allowlist.txt` file in a PR and approve it to automatically add to `.secrets-ignore`.';
             await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
       - name: Fail on scanner findings (opt-in)
         if: steps.scan.outputs.found == 'true' && env.SCANNER_FAIL_ON_FINDINGS == '1'
