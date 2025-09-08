@@ -55,43 +55,68 @@ else
 fi
 
 # Define tasks to create as issues (title|body)
-read -r -d '' TASKS <<'EOF' || true
-Rotate secrets and remove in-repo secrets
-Ensure ADMIN_TOKEN, SECRET_KEY and any cookie tokens are rotated and stored in external secrets manager.
+TASKS=(
+  "Rotate secrets and remove in-repo secrets|Ensure ADMIN_TOKEN, SECRET_KEY and any cookie tokens are rotated and stored in external secrets manager.\n\nRun destructive history purge only after rotation."
+  "Harden session cookies and enable HSTS in production|Verify SESSION_COOKIE_SECURE, HTTPONLY, SAMESITE and HSTS headers are enforced."
+  "Implement mTLS between nginx and app|Add certificate distribution plan and update nginx/gunicorn configs to require client certs."
+  "Apply deny-by-default WAF with staging tuning|Enable stricter WAF rules behind an env toggle; tune using red-team probes."
+  "Enable non-root containers and read-only root fs|Update Dockerfiles to run as non-root, drop caps, and mount writable volumes only where required."
+)
 
-Run destructive history purge only after rotation.
---
-Harden session cookies and enable HSTS in production
-Verify SESSION_COOKIE_SECURE, HTTPONLY, SAMESITE and HSTS headers are enforced.
---
-Implement mTLS between nginx and app
-Add certificate distribution plan and update nginx/gunicorn configs to require client certs.
---
-Apply deny-by-default WAF with staging tuning
-Enable stricter WAF rules behind an env toggle; tune using red-team probes.
---
-Enable non-root containers and read-only root fs
-Update Dockerfiles to run as non-root, drop caps, and mount writable volumes only where required.
-EOF
+LABELS=(security infrastructure)
+ASSIGNEE="$(echo "$REPO_SLUG" | cut -d'/' -f1)"
 
-# Create issues and add to project
 echo "Creating issues and adding them to project $PROJ_ID..."
 
-while IFS= read -r title; do
-  # skip empty lines
-  if [[ -z "$title" ]]; then
-    # consume blank separator
-    read -r body || true
-    continue
+# create template columns if missing (classic project columns)
+TEMPLATE_COLUMNS=("Backlog" "To Do" "In Progress" "Done")
+for col in "${TEMPLATE_COLUMNS[@]}"; do
+  # check if column exists
+  exists=$(gh api --silent "/projects/${PROJ_ID}/columns" | jq -r --arg name "$col" '.[] | select(.name==$name) | .id' || true)
+  if [[ -z "$exists" ]]; then
+    echo "Creating column: $col"
+    gh api --silent --method POST "/projects/${PROJ_ID}/columns" -f name="$col" >/dev/null || echo "Failed to create column $col"
+  else
+    echo "Column exists: $col"
   fi
-  read -r body || true
-  echo "Creating issue: $title"
-  ISSUE_URL=$(gh issue create --repo "$REPO_SLUG" --title "$title" --body "$body" --json number --jq .number)
-  echo "Created issue #$ISSUE_URL"
-  # add issue to project
-  gh project item add --repo "$REPO_SLUG" --project "$PROJ_ID" --issue "$ISSUE_URL" || echo "Failed to add issue #$ISSUE_URL to project"
-  # consume separator if present
-  read -r sep || true
-done < <(echo "$TASKS" | awk 'BEGIN{RS="\n--\n"} {print}' )
+done
+
+for item in "${TASKS[@]}"; do
+  title="$(echo "$item" | cut -d'|' -f1)"
+  body="$(echo "$item" | cut -d'|' -f2- )"
+  echo "Processing task: $title"
+  # check if an issue with the same title already exists
+  existing=$(gh issue list --repo "$REPO_SLUG" --limit 200 --json number,title | jq -r --arg t "$title" '.[] | select(.title==$t) | .number')
+  if [[ -n "$existing" ]]; then
+    echo "Issue already exists: #$existing - $title"
+    ISSUE_NUMBER="$existing"
+  else
+    # create new issue with labels and assignee
+    label_args=()
+    for l in "${LABELS[@]}"; do
+      label_args+=(--label "$l")
+    done
+    echo "Creating issue: $title"
+    ISSUE_NUMBER=$(gh issue create --repo "$REPO_SLUG" --title "$title" --body "$body" "${label_args[@]}" --assignee "$ASSIGNEE" --json number --jq .number)
+    echo "Created issue #$ISSUE_NUMBER"
+  fi
+
+  # ensure issue is added to project (avoid duplicate cards)
+  # fetch issue URL
+  issue_api_url="https://api.github.com/repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}"
+  duplicate=false
+  for col_id in $(gh api --silent "/projects/${PROJ_ID}/columns" | jq -r '.[].id'); do
+    cards=$(gh api --silent "/projects/columns/${col_id}/cards" | jq -r --arg url "$issue_api_url" '.[] | select(.content_url==$url) | .id')
+    if [[ -n "$cards" ]]; then
+      duplicate=true
+      break
+    fi
+  done
+  if [[ "$duplicate" == "true" ]]; then
+    echo "Issue #$ISSUE_NUMBER already in project $PROJ_ID"
+  else
+    gh project item add --repo "$REPO_SLUG" --project "$PROJ_ID" --issue "$ISSUE_NUMBER" || echo "Failed to add issue #$ISSUE_NUMBER to project"
+  fi
+done
 
 echo "Done. Open the project at: https://github.com/${REPO_SLUG}/projects/${PROJ_ID}"
