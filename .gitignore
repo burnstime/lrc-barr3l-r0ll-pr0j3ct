@@ -1,0 +1,8 @@
+# Local secrets
+secrets/
+uploads/
+alerts.log
+__pycache__/
+*.pyc
+.env
+secrets/
