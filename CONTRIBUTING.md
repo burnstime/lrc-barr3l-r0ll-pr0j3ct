@@ -57,3 +57,19 @@ Files of interest
 - `.github/workflows/apply-secrets-allowlist.yml` — workflow that applies approved allowlist entries.
 
 If you have questions about the process or need a maintainer to review an allowlist PR, ping the maintainers in the PR description.
+
+Creating a GitHub Project for tracking
+
+There is a helper script `tools/create_github_project.sh` that can create a GitHub Project (v2) for this repository and seed it with security tasks.
+
+Prerequisites:
+- `gh` CLI installed and authenticated (`gh auth login`)
+- `jq` installed on the runner/machine
+
+Run locally:
+
+```bash
+tools/create_github_project.sh "Security Roadmap" "Initial security tasks"
+```
+
+The script will create issues and add them to the new project. It will print the project URL when finished.
