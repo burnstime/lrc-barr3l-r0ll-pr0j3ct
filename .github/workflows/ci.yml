@@ -11,7 +11,15 @@ jobs:
         with:
           image: trufflesecurity/trufflehog:latest
           options: --rm -v ${{ github.workspace }}:/workspace
-          run: trufflehog filesystem /workspace --json || true
+          run: |
+            trufflehog filesystem /workspace --json > findings.json || true
+            if [ -s findings.json ]; then
+              echo "Potential secrets found by truffleHog:";
+              cat findings.json;
+              exit 1;
+            else
+              echo "No secrets found by truffleHog.";
+            fi
 
   test:
     name: Unit tests & smoke
