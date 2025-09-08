@@ -14,8 +14,32 @@ jobs:
         run: |
           python -m pip install --upgrade pip
       - name: Run local secrets scanner
+        id: scan
         run: |
-          python tools/secrets_scanner.py .
+          # run scanner and capture output to findings.txt (do not fail here)
+          python tools/secrets_scanner.py . > findings.txt || true
+          if [ -s findings.txt ]; then echo "found=true" >> $GITHUB_OUTPUT; else echo "found=false" >> $GITHUB_OUTPUT; fi
+      - name: Upload findings artifact
+        if: steps.scan.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-findings
+          path: findings.txt
+      - name: Comment on PR with findings
+        if: ${{ github.event_name == 'pull_request' && steps.scan.outputs.found == 'true' }}
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const findings = fs.readFileSync('findings.txt','utf8');
+            const body = `Secrets scanner found potential findings:\n\n\`\`\`\n${findings}\n\`\`\`\nPlease review and rotate secrets if necessary.`;
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
+      - name: Fail on scanner findings
+        if: steps.scan.outputs.found == 'true'
+        run: |
+          echo "Secrets scanner found findings; failing job." >&2
+          cat findings.txt >&2
+          exit 1
 
   test:
     name: Unit tests & smoke
