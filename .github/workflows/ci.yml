@@ -16,7 +16,8 @@ jobs:
           pip install truffleHog
       - name: Run truffleHog filesystem scan
         run: |
-          trufflehog filesystem . --json > findings.json || true
+          # truffleHog expects a git_url or repo_path; use --repo_path . to scan the checked-out repo
+          trufflehog filesystem --repo_path . --json > findings.json || true
           if [ -s findings.json ]; then
             echo "Potential secrets found by truffleHog:";
             cat findings.json;
@@ -36,7 +37,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install deps
-        run: pip install -r lab_server/requirements.txt pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r lab_server/requirements.txt pytest
+          # install the project so tests can import package modules
+          pip install -e .
       - name: Run unit tests
         run: pytest -q
       - name: Smoke tests
