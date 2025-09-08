@@ -1,3 +1,14 @@
+# Red Team Playbook
+
+This playbook documents red-team activities, verification steps, and remediation guidance.
+
+Sections:
+- Recon and SAST/DAST runs
+- Secrets rotation and verification
+- Incident simulation steps
+- Forensics and log collection
+
+Follow the procedures in `tools/git_history_purge_plan.md` before any destructive history rewrite.
 Red Team Finish Playbook
 
 Purpose

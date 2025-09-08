@@ -39,6 +39,7 @@ jobs:
       - name: Run project-creation script
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USE_TEMPLATE: 1
         run: |
-          echo "Running project creator with name='${{ github.event.inputs.project_name }}'"
-          bash tools/create_github_project.sh "${{ github.event.inputs.project_name }}" "${{ github.event.inputs.project_body }}"
+          echo "Running project creator with name='${{ github.event.inputs.project_name }}' (using template)"
+          bash tools/create_github_project.sh "${{ github.event.inputs.project_name }}" "${{ github.event.inputs.project_body }}" "security,infrastructure" "" 1

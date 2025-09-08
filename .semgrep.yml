@@ -1,0 +1,50 @@
+rules:
+  - id: python-hardcoded-secret
+    message: "Possible hard-coded secret"
+    languages: [python]
+    severity: ERROR
+    patterns:
+      - pattern: "ADMIN_TOKEN = \"$SECRET\""
+      - pattern: "SECRET_KEY = \"$SECRET\""
+  - id: aws-key
+    message: "Potential AWS access key"
+    languages: [python]
+    severity: WARNING
+    patterns:
+      - pattern-regex: "AKIA[0-9A-Z]{16}"
+  - id: suspicious-eval
+    message: "Use of eval or exec can be dangerous with untrusted input"
+    languages: [python]
+    severity: ERROR
+    patterns:
+      - pattern-regex: "\b(eval|exec)\s*\("
+  - id: open-redirect
+    message: "Potential open redirect or unsafe redirect usage"
+    languages: [python]
+    severity: WARNING
+    patterns:
+      - pattern-regex: "redirect\(.+request\.args|get\("
+  - id: secret-like-string
+    message: "High-entropy string; possible secret"
+    languages: [python]
+    severity: WARNING
+    patterns:
+      - pattern-regex: "[A-Za-z0-9_\-]{32,}"
+  - id: sql-injection
+    message: "Potential SQL injection via string formatting"
+    languages: [python]
+    severity: ERROR
+    patterns:
+      - pattern-regex: "(%s|format\(|f\")" 
+  - id: command-injection
+    message: "Potential command injection when using os.system or subprocess with untrusted input"
+    languages: [python]
+    severity: ERROR
+    patterns:
+      - pattern-regex: "(os\.system|subprocess\.Popen|subprocess\.call)\s*\("
+  - id: xss-sink
+    message: "Potential XSS sink when rendering unescaped user input"
+    languages: [python]
+    severity: WARNING
+    patterns:
+      - pattern-regex: "render_template\(.+\)"
