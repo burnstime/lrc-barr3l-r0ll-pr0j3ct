@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head><title>Staff Login</title></head>
+<body>
+  <form method="POST">
+    <input type="text" name="username" placeholder="Staff Username" required><br>
+    <input type="password" name="password" placeholder="Staff Password" required><br>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Staff Login</button>
+  </form>
+</body>
+</html>
