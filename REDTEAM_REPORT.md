@@ -32,17 +32,44 @@ Remediation steps
    - If any committed file contains real secrets, rotate those credentials immediately (API keys, tokens, passwords).
    - To purge sensitive files from repo history, follow the safe procedure and use the provided `tools/purge_history.ps1` script (this script will not run destructive steps without exact confirmation).
    - Keep the backup mirror generated before purge in a secure location until all collaborators confirm migration, then securely delete it.
+    - Migration helper: use `tools/migrate_secrets.ps1` to preview and create Docker secrets and generate GitHub CLI commands to set Actions secrets. Example (preview):
+       ```pwsh
+       .\tools\migrate_secrets.ps1 -ShowOnly
+       ```
+       To create Docker secrets (requires Docker Swarm) and to actually run creation interactively:
+       ```pwsh
+       .\tools\migrate_secrets.ps1 -SecretFiles '.\secrets\SECRET_KEY','.\secrets\ADMIN_TOKEN' -CreateDockerSecrets
+       ```
 
 2) Runtime protections
    - Set `DECODE_ENABLED=0` in production environment and do not enable it in compose files used for production.
    - Keep `SESSION_COOKIE_SECURE=1` in production (ensure TLS is terminated at nginx/ALB and app sees secure connections).
    - Move admin tokens and secrets to a secret manager (Docker secrets, HashiCorp Vault, cloud KMS or GitHub secrets for CI) and avoid storing them on disk or in source tree.
    - Enable Redis-backed rate-limiting in production (set `USE_REDIS_RATE_LIMIT=1` and configure a robust limit per IP and per account).
+    - Enabling Redis rate limiting (operational steps):
+       1) Provision a Redis instance accessible by the app (e.g., cloud-managed Redis or self-hosted in your VPC).
+       2) Set `REDIS_URL` environment variable to the connection string (e.g. `redis://:<password>@redis-host:6379/0`).
+       3) Set `USE_REDIS_RATE_LIMIT=1` in your production environment (or in systemd/container env) and ensure `REDIS_URL` is present.
+       4) Monitor `alerts.log` and your webhook for repeated rate-limit events and tune `ADMIN_RATE_LIMIT`/`DECODER_RATE_LIMIT` accordingly.
+       5) Optionally enable server-side sessions with Redis by setting `USE_SERVER_SESSION=1` and ensuring `flask-session` and `redis` are installed.
 
 3) Monitoring and CI
    - Add secrets scanning to CI (truffleHog/git-secrets) as a gate on PRs.
    - Add alerts for repeated rate-limit events (`_send_alert` already exists; wire to webhook/ops channel).
    - Add smoke tests in CI that exercise login, CSRF, and upload flows.
+    - GitHub Actions secrets (operational):
+       - Use the `gh` CLI to set repository secrets for CI. Example:
+          ```pwsh
+          gh secret set SECRET_KEY --body "$(Get-Content -Raw ./secrets/SECRET_KEY)"
+          gh secret set ADMIN_TOKEN --body "$(Get-Content -Raw ./secrets/ADMIN_TOKEN)"
+          ```
+       - Do not commit secret files into source. Use the `tools/migrate_secrets.ps1` script to generate the `gh` commands.
+
+    - Rotation guidance (quick):
+       1) Immediately rotate any credentials found in the repo (API keys, tokens, service accounts).
+       2) Deploy rotated credentials via your secret manager (Docker secrets, cloud secrets manager, or GitHub Actions secrets).
+       3) Restart services to pick up new secrets, then revoke old credentials.
+       4) If you performed a history purge, keep the backup mirror until all collaborators have re-cloned and validated the cleaned repo.
 
 Verification checklist
 - [ ] All tests pass locally and in CI (pytest green on PR).
