@@ -39,7 +39,7 @@ def test_decoder_rate_limit_memory():
     # hit the endpoint more than limit
     limit = int(app.config.get('DECODER_RATE_LIMIT', 10))
     for i in range(limit + 2):
-        r = client.get('/decode-login', query_string={'username': 'no', 'password': 'no'})
+        r = client.get('/decode-login', headers={'X-ADMIN-TOKEN': os.environ.get('ADMIN_TOKEN','')}, query_string={'username': 'no', 'password': 'no'})
         if i < limit:
             assert r.status_code in (200, 200)
         else:
