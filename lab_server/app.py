@@ -40,7 +40,21 @@ if os.environ.get('USE_REDIS_RATE_LIMIT', '0') == '1':
 
 app = Flask(__name__)
 # Use an explicit SECRET_KEY in production. Generate ephemeral key only when absent.
-def _read_secret_file(name: str):
+def get_secret(name: str):
+    """Pluggable secret retrieval.
+
+    Order of resolution:
+    1. Docker secret file: /run/secrets/<name>
+    2. Environment variable: os.environ[NAME]
+    3. Optional external backends (only if corresponding client libs and config present):
+       - AWS Secrets Manager (boto3)
+       - HashiCorp Vault (hvac)
+       - Azure Key Vault (azure-identity + azure-keyvault-secrets)
+
+    All backends are optional and failures are silently ignored so test/dev
+    flows which rely on env or ephemeral secrets keep working.
+    """
+    # 1) Docker secret file
     path = f"/run/secrets/{name}"
     try:
         if os.path.exists(path):
@@ -48,9 +62,89 @@ def _read_secret_file(name: str):
                 return f.read().strip()
     except Exception:
         pass
-    return os.environ.get(name)
 
-secret = _read_secret_file('SECRET_KEY')
+    # 2) Environment
+    val = os.environ.get(name)
+    if val:
+        return val
+
+    # 3) AWS Secrets Manager
+    try:
+        boto3 = importlib.import_module('boto3')
+        # require basic config in env or metadata
+        if os.environ.get('AWS_REGION') or os.environ.get('AWS_ACCESS_KEY_ID') or os.environ.get('AWS_SECRET_ACCESS_KEY'):
+            try:
+                client = boto3.client('secretsmanager')
+                resp = client.get_secret_value(SecretId=name)
+                if 'SecretString' in resp and resp['SecretString']:
+                    return resp['SecretString']
+                if 'SecretBinary' in resp and resp['SecretBinary']:
+                    # binary secrets returned as base64 bytes
+                    try:
+                        return resp['SecretBinary'].decode('utf-8')
+                    except Exception:
+                        return None
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 4) HashiCorp Vault (hvac). Support both kv v1 and kv v2 where possible.
+    try:
+        hvac = importlib.import_module('hvac')
+        vault_addr = os.environ.get('VAULT_ADDR')
+        vault_token = os.environ.get('VAULT_TOKEN')
+        if vault_addr and vault_token:
+            try:
+                client = hvac.Client(url=vault_addr, token=vault_token)
+                # try kv v2 path first
+                try:
+                    data = client.secrets.kv.v2.read_secret_version(path=name)
+                    if data and 'data' in data and 'data' in data['data']:
+                        # if secret stored as a dict, prefer a value under 'value' else stringify
+                        sec = data['data']['data']
+                        if isinstance(sec, dict):
+                            if 'value' in sec:
+                                return sec['value']
+                            return str(sec)
+                except Exception:
+                    # fallback to v1
+                    try:
+                        data = client.secrets.kv.v1.read_secret(path=name)
+                        if data and 'data' in data:
+                            sec = data['data']
+                            if isinstance(sec, dict):
+                                if 'value' in sec:
+                                    return sec['value']
+                                return str(sec)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 5) Azure Key Vault
+    try:
+        az_cred = importlib.import_module('azure.identity')
+        az_kv = importlib.import_module('azure.keyvault.secrets')
+        kv_name = os.environ.get('AZURE_KEY_VAULT_NAME')
+        if kv_name:
+            try:
+                VaultUrl = f"https://{kv_name}.vault.azure.net"
+                cred = az_cred.DefaultAzureCredential()
+                client = az_kv.SecretClient(vault_url=VaultUrl, credential=cred)
+                secret_resp = client.get_secret(name)
+                if secret_resp and secret_resp.value:
+                    return secret_resp.value
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return None
+
+secret = get_secret('SECRET_KEY')
 if secret:
     app.secret_key = secret
 else:
@@ -62,6 +156,17 @@ else:
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '1') == '1'
+
+@app.after_request
+def add_security_headers(resp):
+    """Add HSTS header when running in a secure, non-testing environment."""
+    try:
+        if not app.testing and app.config.get('SESSION_COOKIE_SECURE', False):
+            # max-age 1 year, include subdomains and preload safe default
+            resp.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
+    except Exception:
+        pass
+    return resp
 
 # Limit upload size (bytes). Default 10 MB.
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(10 * 1024 * 1024)))
@@ -83,8 +188,8 @@ app.config['ADMIN_RATE_WINDOW'] = int(os.environ.get('ADMIN_RATE_WINDOW', app.co
 # structure: {key: deque([timestamps])}
 _decoder_attempts = defaultdict(deque)
 
-# Read ADMIN_TOKEN from Docker secret if present
-ADMIN_TOKEN = _read_secret_file('ADMIN_TOKEN')
+# Read ADMIN_TOKEN via pluggable secret backend
+ADMIN_TOKEN = get_secret('ADMIN_TOKEN')
 
 
 def _send_alert(msg: str):
@@ -182,7 +287,7 @@ def check_csrf(token):
 
 def get_admin_token():
     """Read admin token from Docker secret file or env each request so runtime changes apply."""
-    t = _read_secret_file('ADMIN_TOKEN')
+    t = get_secret('ADMIN_TOKEN')
     if t:
         return t
     return os.environ.get('ADMIN_TOKEN')

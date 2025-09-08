@@ -19,6 +19,8 @@ def test_redis_rate_limit_integration():
         pytest.skip('Redis not reachable')
     # enable redis rate limiter
     os.environ['USE_REDIS_RATE_LIMIT'] = '1'
+    # ensure ADMIN_TOKEN is set so protected endpoint is accessible
+    os.environ['ADMIN_TOKEN'] = os.environ.get('ADMIN_TOKEN', 'tt')
     app = importlib.import_module('lab_server.app').app
     client = app.test_client()
     # clear key for test remote
