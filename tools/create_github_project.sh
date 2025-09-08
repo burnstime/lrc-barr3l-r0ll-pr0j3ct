@@ -26,6 +26,22 @@ fi
 
 echo "Repo: $REPO_SLUG"
 
+# Ensure required CLI tools are available
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh CLI not found. Install GitHub CLI: https://cli.github.com/" >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq not found. Install jq (e.g. apt install jq, brew install jq, or choco install jq)" >&2
+  exit 1
+fi
+
+# Ensure gh is authenticated
+if ! gh auth status >/dev/null 2>&1; then
+  echo "gh is not authenticated. Run: gh auth login" >&2
+  exit 1
+fi
+
 # Check if project already exists
 EXISTING=$(gh project list --repo "$REPO_SLUG" --limit 100 | awk -F"\t" '{print $1}' | grep -xF "$PROJECT_NAME" || true)
 if [[ -n "$EXISTING" ]]; then
