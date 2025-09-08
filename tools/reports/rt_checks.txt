@@ -1,0 +1,14 @@
+=== decode checks ===
+decode_no_header: 403 {"result":"forbidden"}
+decode_with_admin: admin token not found
+
+=== login & csrf replay ===
+session1 csrf: True
+login_post session1: 200 Login successful!
+session2 csrf: True
+csrf_replay attempt: 200 Invalid CSRF token!
+
+=== uploads ===
+upload csrf token found: True
+upload .exe: 200 File type not allowed!
+upload .txt: 200 File uploaded!

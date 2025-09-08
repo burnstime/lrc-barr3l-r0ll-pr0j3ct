@@ -1,5 +1,6 @@
 import os
 import importlib
+import ipaddress
 from typing import TYPE_CHECKING
 from flask import Flask, render_template, request, session, jsonify
 from werkzeug.utils import secure_filename
@@ -27,14 +28,13 @@ import importlib
 _redis_client = None
 if os.environ.get('USE_REDIS_RATE_LIMIT', '0') == '1':
     try:
-        _redis_client = importlib.import_module('redis')
-        # create a client instance
+        _redis_mod = importlib.import_module('redis')
         try:
             REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
-            _redis_client = _redis_client.from_url(REDIS_URL)
+            _redis_client = _redis_mod.from_url(REDIS_URL)
         except Exception:
-            # leave as module reference; attempt to construct on demand later
-            pass
+            # If we couldn't construct a client, disable redis support gracefully
+            _redis_client = None
     except Exception:
         _redis_client = None
 
@@ -70,10 +70,15 @@ app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(
 ALLOWED_EXTENSIONS = set([e.strip().lower() for e in os.environ.get('ALLOWED_EXTENSIONS', 'txt,pdf,png,jpg,jpeg').split(',')])
 
 # Simple in-memory rate limiting for /decode-login: N requests per WINDOW seconds per remote
-app.config['DECODER_RATE_LIMIT'] = int(os.environ.get('DECODER_RATE_LIMIT', '30'))
+"""
+Rate limit defaults tightened for safety:
+DECODER: 5 requests per 60s
+ADMIN: 10 requests per 60s
+"""
+app.config['DECODER_RATE_LIMIT'] = int(os.environ.get('DECODER_RATE_LIMIT', '5'))
 app.config['DECODER_RATE_WINDOW'] = int(os.environ.get('DECODER_RATE_WINDOW', '60'))
 # Admin/staff rate limit (separate config so limits can differ)
-app.config['ADMIN_RATE_LIMIT'] = int(os.environ.get('ADMIN_RATE_LIMIT', '30'))
+app.config['ADMIN_RATE_LIMIT'] = int(os.environ.get('ADMIN_RATE_LIMIT', '10'))
 app.config['ADMIN_RATE_WINDOW'] = int(os.environ.get('ADMIN_RATE_WINDOW', app.config['DECODER_RATE_WINDOW']))
 # structure: {key: deque([timestamps])}
 _decoder_attempts = defaultdict(deque)
@@ -115,7 +120,7 @@ def _redis_rate_limited(client, key: str, limit: int, window: int) -> bool:
             "if c == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end\n"
             "return c"
         )
-        # If client is a redis.StrictRedis or redis.Redis instance with eval
+        # Expect client to be a redis.Redis instance supporting eval
         cnt = client.eval(lua, 1, key, window)
         try:
             cnt = int(cnt)
@@ -175,6 +180,14 @@ def check_csrf(token):
     return token == session.get('csrf_token')
 
 
+def get_admin_token():
+    """Read admin token from Docker secret file or env each request so runtime changes apply."""
+    t = _read_secret_file('ADMIN_TOKEN')
+    if t:
+        return t
+    return os.environ.get('ADMIN_TOKEN')
+
+
 # Generate every possible combination of login type, username, and password
 usernames = ['user', 'admin', 'staff']
 passwords = ['userpass', 'adminpass', 'staffpass']
@@ -202,35 +215,43 @@ def decode_login():
         # pretend endpoint does not exist in production
         return ('', 404)
 
-    # Stronger admin guard: require an ADMIN_TOKEN to be configured and
-    # require the exact header value. If no ADMIN_TOKEN is configured we
-    # hide the endpoint (return 404) so it cannot be discovered.
-    admin_token_env = ADMIN_TOKEN or os.environ.get('ADMIN_TOKEN')
-    # If no ADMIN_TOKEN is configured, hide the endpoint in production but
-    # allow access when running tests (so unit tests can exercise it).
+    # Stronger admin guard: require an ADMIN_TOKEN via header only (X-ADMIN-TOKEN)
+    admin_token_env = get_admin_token()
+    # If no ADMIN_TOKEN is configured, hide the endpoint in production but allow
+    # access when running tests so unit tests can exercise it.
     if not admin_token_env and not app.testing:
-        # hide endpoint when no admin token is configured
         app.logger.warning('Attempt to access decoder but no ADMIN_TOKEN configured')
         return ('', 404)
 
-    provided = (
-        request.headers.get('X-ADMIN-TOKEN')
-        or request.headers.get('X-Admin-Token')
-        or request.args.get('admin_token')
-        or request.form.get('admin_token')
-    )
-    if provided != admin_token_env:
-        app.logger.warning(f'Unauthorized decoder access attempt from {request.remote_addr}')
-        _send_alert(f'Unauthorized decoder access attempt from {request.remote_addr}')
+    # Only accept the strict header name; don't accept query/form tokens here.
+    provided = request.headers.get('X-ADMIN-TOKEN')
+    # If no token provided, treat as forbidden (do not leak existence)
+    if not provided:
+        app.logger.warning(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
+        _send_alert(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
         return jsonify({"result": "forbidden"}), 403
 
-    # Network restriction: only allow local or docker-internal addresses to use this endpoint.
-    # This prevents the decoder from being called from the public network even with a token.
+    # Use constant-time compare to avoid timing leaks
+    try:
+        if not secrets.compare_digest(str(provided), str(admin_token_env)):
+            app.logger.warning(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+            _send_alert(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+            return jsonify({"result": "forbidden"}), 403
+    except Exception:
+        return jsonify({"result": "forbidden"}), 403
+
+    # Network restriction: only allow loopback or private addresses (RFC1918/ULA)
     remote = (request.remote_addr or '')
-    allow_local = remote in ('127.0.0.1', '::1') or remote.startswith('172.') or remote.startswith('10.') or remote.startswith('192.168.')
-    if not allow_local:
-        app.logger.warning(f'Decoder access denied for non-local address {remote}')
-        _send_alert(f'Decoder access denied for non-local address {remote}')
+    try:
+        ip = ipaddress.ip_address(remote)
+        if not (ip.is_loopback or ip.is_private):
+            app.logger.warning(f'Decoder access denied for non-local address {remote}')
+            _send_alert(f'Decoder access denied for non-local address {remote}')
+            return jsonify({"result": "forbidden"}), 403
+    except Exception:
+        # If the remote address can't be parsed, deny access
+        app.logger.warning(f'Unable to parse remote address for decoder check: {remote}')
+        _send_alert(f'Unable to parse remote address for decoder check: {remote}')
         return jsonify({"result": "forbidden"}), 403
 
     # Rate limiting: prefer Redis-backed counters for distributed safety
@@ -240,30 +261,32 @@ def decode_login():
     key = f"decoder:{remote}"
     try:
         if _redis_client is not None:
-            # Redis INCR with expiry
-            cnt = _redis_client.incr(key)
-            if cnt == 1:
-                _redis_client.expire(key, window)
-            if cnt > limit:
-                app.logger.warning(f'Decoder rate limit exceeded for {remote} (redis)')
-                # if repeated hits, send an alert
-                if cnt % limit == 0:
-                    _send_alert(f"Repeated decoder rate limit for {remote}, count={cnt}")
-                return jsonify({"result": "rate_limited"}), 429
-        else:
-            # Fallback to in-memory deque
-            now = time.time()
-            q = _decoder_attempts[remote]
-            while q and q[0] <= now - window:
-                q.popleft()
-            if len(q) >= limit:
-                app.logger.warning(f'Decoder rate limit exceeded for {remote} (memory)')
-                if len(q) % limit == 0:
-                    _send_alert(f"Repeated decoder rate limit for {remote} (memory), count={len(q)}")
-                return jsonify({"result": "rate_limited"}), 429
-            q.append(now)
+            # Redis-backed rate limiting (ensure client supports incr/expire)
+            try:
+                cnt = _redis_client.incr(key)
+                if cnt == 1:
+                    _redis_client.expire(key, window)
+                if cnt > limit:
+                    app.logger.warning(f'Decoder rate limit exceeded for {remote} (redis)')
+                    if cnt % limit == 0:
+                        _send_alert(f"Repeated decoder rate limit for {remote}, count={cnt}")
+                    return jsonify({"result": "rate_limited"}), 429
+            except Exception as e:
+                app.logger.debug(f'Redis rate limiter error: {e}; falling back to memory')
+                # fall through to in-memory handling
+        # Fallback to in-memory deque
+        now = time.time()
+        q = _decoder_attempts[remote]
+        while q and q[0] <= now - window:
+            q.popleft()
+        if len(q) >= limit:
+            app.logger.warning(f'Decoder rate limit exceeded for {remote} (memory)')
+            if len(q) % limit == 0:
+                _send_alert(f"Repeated decoder rate limit for {remote} (memory), count={len(q)}")
+            return jsonify({"result": "rate_limited"}), 429
+        q.append(now)
     except Exception as e:
-        app.logger.debug(f'Rate limiter failed: {e}; falling back to in-memory')
+        app.logger.debug(f'Rate limiter failed: {e}')
 
     # audit log
     app.logger.info(f'Decode attempt from {remote} for params username={request.args.get("username") or request.form.get("username")}')

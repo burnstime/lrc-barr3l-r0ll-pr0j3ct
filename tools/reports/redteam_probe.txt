@@ -1,0 +1,36 @@
+== Decoder brute-force (sample) ==
+FAIL
+Found matches: []
+
+== CSRF enforcement ==
+PASS
+token_present=True, without_token_resp=b'Invalid CSRF token!', with_token_resp=b'Login successful!'
+
+== WAF blocking of script tag ==
+PASS
+response=b'Blocked by WAF!'
+
+== Upload handling ==
+PASS
+forbidden_resp=b'File type not allowed!', ok_resp=b'File uploaded!', saved_exists=True, upload_dir=C:\Users\12265\OneDrive\Documents\uploads
+
+== Admin-token enforcement ==
+PASS
+no_admin_status=403, with_admin_status=200, with_admin_json={'result': 'invalid', 'username': 'user'}
+
+== Password discovery via decoder ==
+PASS
+found={'user': 'userpass', 'admin': 'adminpass', 'staff': 'staffpass'}
+
+== WAF bypass variants ==
+PASS
+results={'<script>alert(1)</script>': 'Blocked', '%3Cscript%3Ealert(1)%3C%2Fscript%3E': 'Blocked', '<ScRipT>alert(1)</ScRipT>': 'Blocked'}
+
+== Upload traversal attempts ==
+PASS
+results={'../../secret.txt': b'File uploaded!', '..\\..\\secret.txt': b'File uploaded!', '.../../secret.txt': b'File uploaded!', 'normal.txt': b'File uploaded!'}
+
+== CSRF replay across sessions ==
+PASS
+replay_allowed=False, response=b'Invalid CSRF token!'
+

@@ -17,6 +17,11 @@ def report(title, ok, details=""):
 
 def run():
     with app.test_client() as c:
+        # Ensure decoder endpoint is enabled for this local probe and set a known admin token
+        # so the probe can exercise admin-token gated functionality when running outside container.
+        os.environ.setdefault('DECODE_ENABLED', '1')
+        os.environ.setdefault('ADMIN_TOKEN', 'rt-secret')
+
         # 1) Decoder brute-force info disclosure
         combos = all_login_combinations()
         matches = []
