@@ -1,4 +1,0 @@
-# Ignore generated artifacts
-artifacts/**
-REMEDIATION_PATCHES/**
-AUTO_FIXES/**
