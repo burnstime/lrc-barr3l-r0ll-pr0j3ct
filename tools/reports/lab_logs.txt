@@ -1,0 +1,17 @@
+lab-1  |  * Serving Flask app 'app'
+lab-1  |  * Debug mode: off
+lab-1  | [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+lab-1  |  * Running on all addresses (0.0.0.0)
+lab-1  |  * Running on http://127.0.0.1:8000
+lab-1  |  * Running on http://172.18.0.3:8000
+lab-1  | [33mPress CTRL+C to quit[0m
+lab-1  | 172.18.0.4 - - [08/Sep/2025 18:03:41] "GET /login HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:43] "GET / HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:48] "[31m[1mGET /decode-login HTTP/1.1[0m" 403 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:48] "GET /login HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:48] "POST /login HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:48] "GET /login HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:49] "POST /login HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:49] "GET /upload HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:49] "POST /upload HTTP/1.1" 200 -
+lab-1  | 172.18.0.1 - - [08/Sep/2025 18:03:49] "POST /upload HTTP/1.1" 200 -
