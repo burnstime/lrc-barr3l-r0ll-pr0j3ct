@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 import re
 import secrets
 import time
+import logging
+from logging.handlers import RotatingFileHandler
 from urllib.parse import unquote_plus
 from collections import defaultdict, deque
 import importlib
@@ -188,6 +190,27 @@ app.config['ADMIN_RATE_WINDOW'] = int(os.environ.get('ADMIN_RATE_WINDOW', app.co
 # structure: {key: deque([timestamps])}
 _decoder_attempts = defaultdict(deque)
 
+# HMAC replay/nonce store: map nonce -> timestamp
+# Keep a small in-memory cache to avoid replay attacks; window configurable via env
+_hmac_nonce_store = {}
+_HMAC_WINDOW = int(os.environ.get('ADMIN_HMAC_WINDOW', '300'))
+
+# Alerts logger: write a rotating alerts.log in the repo root so alerts are durable and
+# bounded. This keeps a local forensic trail even if webhooks/syslog are used.
+_alerts_logger = logging.getLogger('alerts')
+if not _alerts_logger.handlers:
+    try:
+        alerts_path = os.path.join(os.getcwd(), 'alerts.log')
+        handler = RotatingFileHandler(alerts_path, maxBytes=1024 * 1024, backupCount=3, encoding='utf-8')
+        handler.setLevel(logging.ERROR)
+        fmt = logging.Formatter('%(asctime)s %(message)s')
+        handler.setFormatter(fmt)
+        _alerts_logger.addHandler(handler)
+        _alerts_logger.setLevel(logging.ERROR)
+    except Exception:
+        # best-effort: if file handler cannot be created, fall back to root logger
+        _alerts_logger = logging.getLogger()
+
 # Read ADMIN_TOKEN via pluggable secret backend
 ADMIN_TOKEN = get_secret('ADMIN_TOKEN')
 
@@ -195,23 +218,31 @@ ADMIN_TOKEN = get_secret('ADMIN_TOKEN')
 def _send_alert(msg: str):
     """Simple alert sink: log and append to alerts.log in repo root."""
     app.logger.error(msg)
+    # webhook first (best-effort)
     try:
-        # try webhook first
+        from .alerting import send_webhook_alert
         try:
-            from .alerting import send_webhook_alert
             if send_webhook_alert(msg):
+                # still log locally for forensic purposes
+                _alerts_logger.error(msg)
                 return
         except Exception:
             pass
-        # prefer syslog if available
-        try:
-            import syslog
-            syslog.syslog(syslog.LOG_ERR, msg)
-            return
-        except Exception:
-            pass
-        with open(os.path.join(os.getcwd(), 'alerts.log'), 'a', encoding='utf-8') as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+    # syslog (best-effort)
+    try:
+        import syslog
+        syslog.syslog(syslog.LOG_ERR, msg)
+    except Exception:
+        pass
+
+    # always persist via alerts logger (rotating file handler)
+    try:
+        _alerts_logger.error(msg)
+    except Exception as e:
+        app.logger.debug(f'Failed to write alerts via logger: {e}')
     except Exception as e:
         app.logger.debug(f'Failed to write alerts.log: {e}')
 
@@ -293,6 +324,55 @@ def get_admin_token():
     return os.environ.get('ADMIN_TOKEN')
 
 
+def verify_admin_hmac(header_value: str) -> bool:
+    """Verify an HMAC header of the form ts:nounce:hmac where hmac is hex HMAC-SHA256 over ts:nounce using ADMIN_HMAC_SECRET"""
+    try:
+        import hmac as _hmac
+        import hashlib as _hashlib
+        secret = get_secret('ADMIN_HMAC_SECRET') or os.environ.get('ADMIN_HMAC_SECRET')
+        if not secret:
+            return False
+        parts = header_value.split(':')
+        if len(parts) != 3:
+            return False
+        ts, nonce, sig = parts
+        # basic timestamp validation
+        try:
+            ts_int = int(ts)
+        except Exception:
+            return False
+        now = int(time.time())
+        if abs(now - ts_int) > _HMAC_WINDOW:
+            # outside allowed window
+            return False
+
+        # nonce replay protection: store seen nonces for the window
+        # cleanup old entries
+        try:
+            cutoff = now - _HMAC_WINDOW
+            for n, t in list(_hmac_nonce_store.items()):
+                if t < cutoff:
+                    del _hmac_nonce_store[n]
+        except Exception:
+            pass
+        # if nonce seen recently, reject
+        if nonce in _hmac_nonce_store:
+            return False
+
+        msg = f"{ts}:{nonce}".encode('utf-8')
+        expected = _hmac.new(secret.encode('utf-8'), msg, _hashlib.sha256).hexdigest()
+        # constant time compare
+        ok = _hmac.compare_digest(expected, sig)
+        if ok:
+            try:
+                _hmac_nonce_store[nonce] = now
+            except Exception:
+                pass
+        return ok
+    except Exception:
+        return False
+
+
 # Generate every possible combination of login type, username, and password
 usernames = ['user', 'admin', 'staff']
 passwords = ['userpass', 'adminpass', 'staffpass']
@@ -322,6 +402,8 @@ def decode_login():
 
     # Stronger admin guard: require an ADMIN_TOKEN via header only (X-ADMIN-TOKEN)
     admin_token_env = get_admin_token()
+    # If ADMIN_HMAC_SECRET is configured, prefer HMAC header authentication
+    hmac_secret = get_secret('ADMIN_HMAC_SECRET') or os.environ.get('ADMIN_HMAC_SECRET')
     # If no ADMIN_TOKEN is configured:
     # - in production: hide endpoint (404)
     # - in testing: allow access (so unit tests can exercise it)
@@ -330,23 +412,37 @@ def decode_login():
             app.logger.warning('Attempt to access decoder but no ADMIN_TOKEN configured')
             return ('', 404)
         # testing mode and no admin token: allow access without header
-    else:
-        # Only accept the strict header name; don't accept query/form tokens here.
-        provided = request.headers.get('X-ADMIN-TOKEN')
-        # If no token provided, treat as forbidden (do not leak existence)
-        if not provided:
-            app.logger.warning(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
-            _send_alert(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
-            return jsonify({"result": "forbidden"}), 403
-
-        # Use constant-time compare to avoid timing leaks
+        # but emit an alert so tests and auditing can record this access
         try:
-            if not secrets.compare_digest(str(provided), str(admin_token_env)):
-                app.logger.warning(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
-                _send_alert(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
-                return jsonify({"result": "forbidden"}), 403
+            _send_alert(f'Decoder accessed in testing mode without ADMIN_TOKEN from {request.remote_addr}')
         except Exception:
-            return jsonify({"result": "forbidden"}), 403
+            app.logger.debug('Failed to emit testing-mode decoder access alert')
+    else:
+        # If HMAC secret present, require HMAC header; otherwise accept X-ADMIN-TOKEN
+        if hmac_secret:
+            provided_hmac = request.headers.get('X-ADMIN-HMAC')
+            if not provided_hmac or not verify_admin_hmac(provided_hmac):
+                app.logger.warning(f'Unauthorized decoder access attempt (bad or missing HMAC) from {request.remote_addr}')
+                _send_alert(f'Unauthorized decoder access attempt (bad or missing HMAC) from {request.remote_addr}')
+                return jsonify({"result": "forbidden"}), 403
+            app.logger.info(f'Admin HMAC auth success from {request.remote_addr}')
+        else:
+            # Only accept the strict header name; don't accept query/form tokens here.
+            provided = request.headers.get('X-ADMIN-TOKEN')
+            # If no token provided, treat as forbidden (do not leak existence)
+            if not provided:
+                app.logger.warning(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
+                _send_alert(f'Unauthorized decoder access attempt (no header) from {request.remote_addr}')
+                return jsonify({"result": "forbidden"}), 403
+
+            # Use constant-time compare to avoid timing leaks
+            try:
+                if not secrets.compare_digest(str(provided), str(admin_token_env)):
+                    app.logger.warning(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+                    _send_alert(f'Unauthorized decoder access attempt (bad token) from {request.remote_addr}')
+                    return jsonify({"result": "forbidden"}), 403
+            except Exception:
+                return jsonify({"result": "forbidden"}), 403
 
     # Network restriction: only allow loopback or private addresses (RFC1918/ULA)
     remote = (request.remote_addr or '')

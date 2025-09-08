@@ -1,0 +1,16 @@
+{
+  "name": "Security Roadmap Template",
+  "body": "Template project with standard columns and basic automation placeholders.",
+  "columns": [
+    "Backlog",
+    "To Do",
+    "In Progress",
+    "Done"
+  ],
+  "automations": [
+    {
+      "when": "issue_opened",
+      "action": "add_to_backlog"
+    }
+  ]
+}

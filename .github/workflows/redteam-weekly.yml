@@ -1,0 +1,19 @@
+name: Weekly Red Team Scan
+on:
+  schedule:
+    - cron: '0 3 * * 1' # every Monday at 03:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  run-security-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run security CI (full)
+        run: |
+          bash tools/security_scan.sh --json-out artifacts/security/weekly_summary.json
+          echo "Weekly security scan completed"
