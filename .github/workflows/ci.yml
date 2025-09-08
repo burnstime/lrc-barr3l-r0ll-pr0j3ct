@@ -1,8 +1,22 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  test:
+  secrets-scan:
+    name: Secrets scan
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run truffleHog (container)
+        uses: addnab/docker-run-action@v4
+        with:
+          image: trufflesecurity/trufflehog:latest
+          options: --rm -v ${{ github.workspace }}:/workspace
+          run: trufflehog filesystem /workspace --json || true
+
+  test:
+    name: Unit tests & smoke
+    runs-on: ubuntu-latest
+    needs: secrets-scan
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
@@ -11,5 +25,8 @@ jobs:
           python-version: '3.11'
       - name: Install deps
         run: pip install -r lab_server/requirements.txt pytest
-      - name: Run tests
+      - name: Run unit tests
         run: pytest -q
+      - name: Smoke tests
+        run: |
+          pytest tests/test_leftrightbarrelroll.py::test_smoke || true
