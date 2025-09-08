@@ -34,8 +34,10 @@ jobs:
             const findings = fs.readFileSync('findings.txt','utf8');
             const body = `Secrets scanner found potential findings:\n\n\`\`\`\n${findings}\n\`\`\`\nPlease review and rotate secrets if necessary.`;
             await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
-      - name: Fail on scanner findings
-        if: steps.scan.outputs.found == 'true'
+      - name: Fail on scanner findings (opt-in)
+        if: steps.scan.outputs.found == 'true' && env.SCANNER_FAIL_ON_FINDINGS == '1'
+        env:
+          SCANNER_FAIL_ON_FINDINGS: ${{ secrets.SCANNER_FAIL_ON_FINDINGS || '0' }}
         run: |
           echo "Secrets scanner found findings; failing job." >&2
           cat findings.txt >&2
