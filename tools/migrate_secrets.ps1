@@ -49,7 +49,8 @@ foreach($path in $SecretFiles){
 # GitHub CLI commands for Actions secrets (encrypted at rest)
 foreach($path in $SecretFiles){
     $name = [System.IO.Path]::GetFileName($path)
-    $cmd = "gh secret set $name --body \"$(Get-Content -Raw -Path $path)\""
+    # Use format string with single-quoted literal to avoid PowerShell evaluating $(...) during parsing
+    $cmd = ('gh secret set {0} --body "$(Get-Content -Raw ''{1}'')"' -f $name, $path)
     Write-Host "GitHub secret command (requires gh cli):`n  $cmd`n"
 }
 
