@@ -181,8 +181,8 @@ def find_forms(url: str, session) -> List[Dict]:
     Returns empty list on fetch or dependency errors.
     """
     try:
-        import requests  # noqa: F401
         from bs4 import BeautifulSoup
+        import requests  # local optional import (used below)
     except Exception:
         # Missing optional deps; caller should handle accordingly
         return []

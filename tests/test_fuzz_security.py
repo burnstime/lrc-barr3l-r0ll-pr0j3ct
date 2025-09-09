@@ -1,7 +1,6 @@
 from hypothesis import given, strategies as st
 import io
-import os
-import json
+# os and json intentionally unused in some fuzz fixtures; keep if needed
 
 from lab_server.app import app
 

@@ -14,7 +14,7 @@ def test_alert_written_on_unauthorized_decoder(tmp_path):
     app.testing = True
     client = app.test_client()
     # call decoder without token (in testing mode it may allow; ensure alert route triggers)
-    resp = client.get('/decode-login')
+    _ = client.get('/decode-login')
     # The app writes alerts.log on unauthorized attempts; wait briefly
     time.sleep(0.1)
     assert os.path.exists(alerts)

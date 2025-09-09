@@ -11,6 +11,7 @@ import os
 import re
 import difflib
 from pathlib import Path
+import html
 
 SRC_EXTS = ['.py']
 OUT_DIR = 'AUTO_FIXES'

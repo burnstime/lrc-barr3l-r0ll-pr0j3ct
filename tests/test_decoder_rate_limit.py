@@ -1,6 +1,5 @@
 import sys
 import os
-import time
 sys.path.insert(0, r'C:\Users\12265\OneDrive\Documents')
 from lab_server.app import app
 

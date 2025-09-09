@@ -9,7 +9,7 @@ try:
     # optional server-side session support
     from flask_session import Session
     HAS_FLASK_SESSION = True
-except Exception:
+except Exception as e:
     HAS_FLASK_SESSION = False
 
 # For type-checkers only; avoid real import at runtime to prevent
@@ -24,7 +24,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 from urllib.parse import unquote_plus
 from collections import defaultdict, deque
-import importlib
 
 # Optional Redis client for distributed rate-limiting / session stores
 _redis_client = None
@@ -84,11 +83,11 @@ def get_secret(name: str):
                     # binary secrets returned as base64 bytes
                     try:
                         return resp['SecretBinary'].decode('utf-8')
-                    except Exception:
+                    except Exception as e:
                         return None
-            except Exception:
+            except Exception as e:
                 pass
-    except Exception:
+    except Exception as e:
         pass
 
     # 4) HashiCorp Vault (hvac). Support both kv v1 and kv v2 where possible.
@@ -109,7 +108,7 @@ def get_secret(name: str):
                             if 'value' in sec:
                                 return sec['value']
                             return str(sec)
-                except Exception:
+                except Exception as e:
                     # fallback to v1
                     try:
                         data = client.secrets.kv.v1.read_secret(path=name)
@@ -119,11 +118,11 @@ def get_secret(name: str):
                                 if 'value' in sec:
                                     return sec['value']
                                 return str(sec)
-                    except Exception:
+                    except Exception as e:
                         pass
-            except Exception:
+            except Exception as e:
                 pass
-    except Exception:
+    except Exception as e:
         pass
 
     # 5) Azure Key Vault
@@ -139,9 +138,9 @@ def get_secret(name: str):
                 secret_resp = client.get_secret(name)
                 if secret_resp and secret_resp.value:
                     return secret_resp.value
-            except Exception:
+            except Exception as e:
                 pass
-    except Exception:
+    except Exception as e:
         pass
 
     return None
@@ -166,7 +165,7 @@ def add_security_headers(resp):
         if not app.testing and app.config.get('SESSION_COOKIE_SECURE', False):
             # max-age 1 year, include subdomains and preload safe default
             resp.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
-    except Exception:
+    except Exception as e:
         pass
     return resp
 
@@ -242,9 +241,9 @@ def _send_alert(msg: str):
     try:
         _alerts_logger.error(msg)
     except Exception as e:
-        app.logger.debug(f'Failed to write alerts via logger: {e}')
-    except Exception as e:
-        app.logger.debug(f'Failed to write alerts.log: {e}')
+        # Best-effort: if file handler write fails, log at debug level.
+        # Consolidated duplicate handlers to avoid unreachable except blocks.
+        app.logger.debug(f'Failed to write alerts via logger/alerts.log: {e}')
 
 
 def _redis_rate_limited(client, key: str, limit: int, window: int) -> bool:
@@ -260,7 +259,7 @@ def _redis_rate_limited(client, key: str, limit: int, window: int) -> bool:
         cnt = client.eval(lua, 1, key, window)
         try:
             cnt = int(cnt)
-        except Exception:
+        except Exception as e:
             cnt = 0
         return cnt > limit
     except Exception as e:
@@ -273,9 +272,9 @@ if os.environ.get('USE_SERVER_SESSION', '0') == '1' and HAS_FLASK_SESSION:
     redis_url = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
     try:
         # import redis at runtime (if present) rather than at module import
-        _redis = importlib.import_module('redis')
+        _redis_mod_for_session = importlib.import_module('redis')
         app.config['SESSION_TYPE'] = 'redis'
-        app.config['SESSION_REDIS'] = _redis.from_url(redis_url)
+        app.config['SESSION_REDIS'] = _redis_mod_for_session.from_url(redis_url)
         Session(app)
         app.logger.info('Server-side sessions enabled via Redis')
     except Exception as e:
@@ -339,7 +338,7 @@ def verify_admin_hmac(header_value: str) -> bool:
         # basic timestamp validation
         try:
             ts_int = int(ts)
-        except Exception:
+        except Exception as e:
             return False
         now = int(time.time())
         if abs(now - ts_int) > _HMAC_WINDOW:
@@ -353,7 +352,7 @@ def verify_admin_hmac(header_value: str) -> bool:
             for n, t in list(_hmac_nonce_store.items()):
                 if t < cutoff:
                     del _hmac_nonce_store[n]
-        except Exception:
+        except Exception as e:
             pass
         # if nonce seen recently, reject
         if nonce in _hmac_nonce_store:
@@ -366,10 +365,10 @@ def verify_admin_hmac(header_value: str) -> bool:
         if ok:
             try:
                 _hmac_nonce_store[nonce] = now
-            except Exception:
+            except Exception as e:
                 pass
         return ok
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -452,7 +451,7 @@ def decode_login():
             app.logger.warning(f'Decoder access denied for non-local address {remote}')
             _send_alert(f'Decoder access denied for non-local address {remote}')
             return jsonify({"result": "forbidden"}), 403
-    except Exception:
+    except Exception as e:
         # If the remote address can't be parsed, deny access
         app.logger.warning(f'Unable to parse remote address for decoder check: {remote}')
         _send_alert(f'Unable to parse remote address for decoder check: {remote}')
@@ -557,7 +556,7 @@ def admin_login():
                 if len(q) >= limit:
                     return "Too many attempts", 429
                 q.append(now)
-        except Exception:
+        except Exception as e:
             pass
         if not check_csrf(token):
             return "Invalid CSRF token!"
@@ -598,7 +597,7 @@ def staff_login():
                 if len(q) >= limit:
                     return "Too many attempts", 429
                 q.append(now)
-        except Exception:
+        except Exception as e:
             pass
         if not check_csrf(token):
             return "Invalid CSRF token!"

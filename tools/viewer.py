@@ -1,7 +1,6 @@
 from flask import Flask, render_template_string, request
 import csv
 import os
-import html
 
 from tools.visual_diff import row_to_html
 
