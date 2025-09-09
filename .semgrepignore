@@ -2,3 +2,12 @@
 artifacts/**
 REMEDIATION_PATCHES/**
 AUTO_FIXES/**
+# Ignore local python virtualenvs and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+build/
+dist/
+.pytest_cache/

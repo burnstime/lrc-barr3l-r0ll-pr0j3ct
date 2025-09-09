@@ -48,3 +48,13 @@ dist/
 htmlcov/
 .coverage
 
+# Additional ignores
+.venv/
+venv/
+.pytest_cache/
+artifacts/
+REMEDIATION_PATCHES/
+AUTO_FIXES/
+*.zip
+.env.*
+
